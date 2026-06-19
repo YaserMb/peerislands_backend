@@ -26,19 +26,17 @@ Use this backend for an e-commerce order processing API:
 
 ## Current State
 
-The project is still a scaffold. At the time this guide was added:
+The project is still a scaffold.
 
-- `app/core/config.py`, `app/db/base.py`, `app/db/session.py`, `app/db/models/`,
-  and `alembic/` provide the initial environment, database models, and migration
-  foundation.
-- `app/api/v1/auth.py`, `app/core/security.py`, `app/schemas/auth.py`,
-  `app/schemas/users.py`, `app/services/auth.py`, and `app/services/users.py`
-  provide registration, login, and current-user authentication.
+- Config, logging, database models, Alembic, and auth are implemented.
+- `app/api/v1/auth.py` provides register, login, and current-user endpoints.
 - `tests/test_auth.py` covers the implemented auth endpoints with an isolated
   SQLite test database.
 - `PRD.md` is the source of truth for the intended backend behavior.
-- Product, address, order, report, scheduler, tests, and user-facing docs still
-  need to be added.
+- `README.md` and `AI_USAGE.md` document setup, verification, and AI-assisted
+  development notes.
+- Product, address, order, report, scheduler, and broader tests still need to
+  be added.
 
 ## Build Verification
 
@@ -105,21 +103,13 @@ app/
     base.py
     session.py
     models/
-      users.py
-      products.py
-      addresses.py
-      orders.py
   schemas/
     users.py
     auth.py
-    products.py
-    addresses.py
     orders.py
   services/
     users.py
     auth.py
-    products.py
-    addresses.py
     orders.py
     scheduler.py
 tests/

@@ -26,7 +26,9 @@ Target capabilities:
 backend/
   .env.example
   AGENTS.md
+  AI_USAGE.md
   PRD.md
+  README.md
   REPO_MAP.md
   requirements.txt
   alembic.ini
@@ -79,6 +81,8 @@ backend/
 |------|--------------|
 | `skills/update-docs/SKILL.md` | Project-local skill for keeping docs current after meaningful changes. |
 | `PRD.md` | Product and technical requirements. This is the source of truth. |
+| `README.md` | Human setup, migration, run, auth endpoint, and test instructions. |
+| `AI_USAGE.md` | Summary of AI-assisted implementation work and verification performed. |
 | `AGENTS.md` | Instructions for AI coding agents working in this backend. |
 | `REPO_MAP.md` | This file; quick navigation guide. |
 | `requirements.txt` | Python dependencies for FastAPI, SQLAlchemy, Alembic, auth, scheduler, and tests. |
@@ -89,9 +93,9 @@ backend/
 | `app/main.py` | FastAPI app setup that mounts the versioned API router and keeps a temporary `/test` endpoint. |
 | `app/api/v1/api.py` | Central v1 router registration. |
 | `app/api/v1/auth.py` | Register, login, and current-user endpoints under `/api/v1/auth`. |
-| `app/core/config.py` | Pydantic settings loaded from `.env`, including SQLite-first database URL, JWT settings, and CORS origins. |
+| `app/core/config.py` | Pydantic settings loaded from `.env`, including SQLite-first database URL, log level, JWT settings, and CORS origins. |
 | `app/core/security.py` | Password hashing, JWT creation/validation, and current-user dependency. |
-| `app/core/logging.py` | Placeholder for logging setup. |
+| `app/core/logging.py` | Application logging setup for app, Uvicorn, access, and SQLAlchemy loggers. |
 | `app/db/base.py` | SQLAlchemy declarative base plus model module imports for Alembic metadata discovery. |
 | `app/db/session.py` | SQLAlchemy engine, session factory, and `get_db` dependency using configured `DATABASE_URL`. |
 | `app/db/models/users.py` | `User` model and `UserRole` enum. |
@@ -110,13 +114,6 @@ backend/
 
 ## 4) Files To Add
 
-### Project setup
-
-| Path | Purpose |
-|------|---------|
-| `README.md` | Setup, run, migration, and test instructions. |
-| `AI_USAGE.md` | Notes on AI-assisted development, as requested by the PRD. |
-
 ### API layer
 
 | Path | Purpose |
@@ -125,12 +122,6 @@ backend/
 | `app/api/v1/addresses.py` | Authenticated address CRUD. |
 | `app/api/v1/orders.py` | Create/list/detail/cancel/status-update endpoints. |
 | `app/api/v1/reports.py` | Admin order report endpoint. |
-
-### Core helpers
-
-| Path | Purpose |
-|------|---------|
-| `app/core/logging.py` | Consistent application logging. |
 
 ### Database
 
@@ -189,7 +180,7 @@ backend/
 6. Add order create/list/detail/cancel/status/report behavior.
 7. Add APScheduler startup/shutdown wiring and testable job service.
 8. Add pytest coverage for PRD acceptance criteria.
-9. Add README and AI_USAGE documentation.
+9. Keep README and AI_USAGE updated as user-facing behavior expands.
 
 ## 7) Notes
 

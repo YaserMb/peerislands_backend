@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "Order Processing API"
     environment: str = "local"
     debug: bool = True
+    log_level: str = "INFO"
 
     database_url: str = "sqlite:///./app.db"
 
