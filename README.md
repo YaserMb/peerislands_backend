@@ -16,14 +16,11 @@ Implemented:
 - Saved-address create/list/retrieve/update/delete endpoints
 - Address ownership enforcement and default-address behavior
 - Customer order create/list/detail/cancel endpoints
+- Admin order status update endpoint
+- Admin order report endpoint with optional status filtering
 - Server-side order total calculation with product and address snapshots
-- Pytest coverage for auth, products, addresses, and customer orders
-
-Still pending:
-
-- admin order status/report endpoints
-- scheduler job for pending orders
-- broader API test coverage
+- Celery Beat + Redis scheduled processing for pending orders
+- Pytest coverage for auth, products, addresses, customer orders, and scheduler logic
 
 ## Setup
 
@@ -57,6 +54,14 @@ Logging defaults to `INFO`:
 LOG_LEVEL=INFO
 ```
 
+Celery uses Redis for scheduled background processing:
+
+```text
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/1
+PENDING_ORDER_PROCESSING_INTERVAL_SECONDS=300
+```
+
 ## Database
 
 Apply migrations before running the API against the local database:
@@ -65,7 +70,8 @@ Apply migrations before running the API against the local database:
 venv/bin/alembic upgrade head
 ```
 
-This creates/updates the ignored local SQLite database file at `app.db`.
+This creates/updates the ignored local SQLite database file at `app.db` and
+seeds the sample product catalog used for order creation.
 
 Create a new migration after model changes:
 
@@ -92,6 +98,21 @@ Open the Swagger UI at:
 ```text
 http://127.0.0.1:8000/docs
 ```
+
+## Background Jobs
+
+Pending orders are processed by Celery Beat and a Celery worker using Redis.
+The task updates `PENDING` orders to `PROCESSING` every 300 seconds.
+
+Start Redis locally, then run the worker and beat in separate terminals:
+
+```bash
+venv/bin/celery -A app.core.celery_app:celery_app worker --loglevel=info
+venv/bin/celery -A app.core.celery_app:celery_app beat --loglevel=info
+```
+
+The reusable processing logic lives in `app.services.orders.process_pending_orders`
+so tests can validate it without waiting for Celery Beat.
 
 ## Auth Endpoints
 
@@ -143,6 +164,15 @@ items after:
 ```bash
 venv/bin/alembic upgrade head
 ```
+
+Seeded products:
+
+- `PI-KEYBOARD-001` - Mechanical Keyboard - `79.99`
+- `PI-MOUSE-001` - Wireless Mouse - `29.99`
+- `PI-HEADSET-001` - Noise-Cancelling Headset - `119.99`
+
+Users, saved addresses, and orders are not seeded. Create them through the auth,
+address, and order API endpoints.
 
 ## Address Endpoints
 
@@ -252,12 +282,33 @@ Cancel a pending order:
 POST /api/v1/orders/{order_id}/cancel
 ```
 
+Admin update order status:
+
+```http
+PATCH /api/v1/orders/{order_id}/status
+```
+
+```json
+{
+  "status": "SHIPPED"
+}
+```
+
+Admin order report:
+
+```http
+GET /api/v1/reports/orders
+GET /api/v1/reports/orders?status=PENDING
+```
+
 Order rules:
 
 - Users can only access their own orders.
 - Accessing another user's order returns `404`.
 - New orders start as `PENDING`.
 - Only `PENDING` orders can be cancelled.
+- Only admin users can update operational statuses or access the all-order report.
+- `CANCELLED` orders cannot be updated through the status endpoint.
 - Product prices, line totals, and order totals are calculated server-side.
 - Product name/unit price and shipping address fields are copied into order snapshots.
 
@@ -270,6 +321,7 @@ venv/bin/python -m pytest tests/test_auth.py
 venv/bin/python -m pytest tests/test_products.py
 venv/bin/python -m pytest tests/test_addresses.py
 venv/bin/python -m pytest tests/test_orders.py
+venv/bin/python -m pytest tests/test_scheduler.py
 ```
 
 Run the full test suite:

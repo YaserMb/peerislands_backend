@@ -16,6 +16,10 @@ class OrderCreate(BaseModel):
     items: list[OrderItemCreate] = Field(min_length=1)
 
 
+class OrderStatusUpdate(BaseModel):
+    status: OrderStatus
+
+
 class OrderItemRead(BaseModel):
     id: int
     product_id: int
@@ -23,6 +27,18 @@ class OrderItemRead(BaseModel):
     quantity: int
     unit_price: Decimal
     line_total: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OrderReportRead(BaseModel):
+    id: int
+    user_id: int
+    customer_email: str
+    status: OrderStatus
+    total_amount: Decimal
+    item_count: int
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

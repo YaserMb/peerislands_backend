@@ -54,7 +54,7 @@ The API should still support direct order creation so the assignment requirement
 - Migrations: Alembic
 - Authentication: JWT using OAuth2 password flow
 - Password hashing: passlib with bcrypt
-- Background scheduler: APScheduler
+- Background scheduler: Celery Beat with Redis
 - Testing: pytest and FastAPI TestClient
 - API docs: FastAPI Swagger UI at `/docs`
 
@@ -499,12 +499,14 @@ Behavior:
 
 Implementation:
 
-- Use APScheduler for this take-home assignment.
+- Use Celery Beat for scheduling.
+- Use Redis as the Celery broker and result backend.
 - Keep job logic inside a service function so it can be tested directly.
+- Keep the Celery task wrapper responsible for opening and closing its own database session.
 
 Production note:
 
-- In production, this could be moved to Celery Beat, Redis, RabbitMQ, or a cloud scheduler so background processing can scale independently from the API process.
+- Celery worker and beat processes should run separately from the FastAPI web process so background processing can scale independently.
 
 ## 8. Database and Migration Requirements
 
@@ -669,7 +671,7 @@ I intentionally did not add a cart because the assignment focuses on order proce
 
 I added JWT authentication so every address and order belongs to an authenticated customer. I kept API routes thin and placed business rules in the service layer, which allows both API endpoints and background jobs to reuse the same order processing logic.
 
-For the scheduled processing requirement, I used APScheduler because it keeps the take-home project easy to run locally. The actual job logic is isolated in a service function so it can be tested without waiting 5 minutes. For production, I would move this to Celery Beat or a cloud scheduler.
+For the scheduled processing requirement, I used Celery Beat with Redis. Beat publishes the pending-order processing task every 5 minutes, and a Celery worker executes it independently from the FastAPI web process. The actual job logic is isolated in a service function so it can be tested without waiting 5 minutes or requiring Redis in the test suite.
 
 I used Alembic for migrations so schema changes are version-controlled and reproducible. I also added tests for authentication, address operations, order creation, filtering, cancellation rules, and background processing.
 ```

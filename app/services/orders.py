@@ -1,11 +1,12 @@
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models.addresses import Address
 from app.db.models.orders import Order, OrderItem, OrderStatus
 from app.db.models.products import Product
+from app.db.models.users import User
 from app.schemas.orders import OrderCreate
 from app.services.addresses import get_user_address
 
@@ -22,6 +23,10 @@ class ProductNotFoundError(ValueError):
 
 
 class OrderCancellationError(ValueError):
+    pass
+
+
+class OrderStatusUpdateError(ValueError):
     pass
 
 
@@ -97,6 +102,60 @@ def get_user_order(db: Session, *, user_id: int, order_id: int) -> Order | None:
     return db.scalar(statement)
 
 
+def get_order_by_id(db: Session, *, order_id: int) -> Order | None:
+    statement = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+    )
+    return db.scalar(statement)
+
+
+def list_all_orders_report(
+    db: Session,
+    *,
+    status_filter: OrderStatus | None = None,
+) -> list[dict]:
+    statement = (
+        select(
+            Order.id,
+            Order.user_id,
+            User.email.label("customer_email"),
+            Order.status,
+            Order.total_amount,
+            func.count(OrderItem.id).label("item_count"),
+            Order.created_at,
+        )
+        .join(User, Order.user_id == User.id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .group_by(
+            Order.id,
+            Order.user_id,
+            User.email,
+            Order.status,
+            Order.total_amount,
+            Order.created_at,
+        )
+        .order_by(Order.created_at.desc(), Order.id.desc())
+    )
+    if status_filter is not None:
+        statement = statement.where(Order.status == status_filter)
+
+    return [dict(row._mapping) for row in db.execute(statement)]
+
+
+def update_order_status(db: Session, *, order: Order, new_status: OrderStatus) -> Order:
+    if order.status == OrderStatus.CANCELLED:
+        raise OrderStatusUpdateError("Cancelled orders cannot be updated")
+    if new_status == OrderStatus.CANCELLED:
+        raise OrderStatusUpdateError("Use the cancel endpoint to cancel pending orders")
+
+    order.status = new_status
+    db.commit()
+    db.refresh(order)
+    return order
+
+
 def cancel_order(db: Session, *, order: Order) -> Order:
     if order.status != OrderStatus.PENDING:
         raise OrderCancellationError("Only pending orders can be cancelled")
@@ -105,6 +164,17 @@ def cancel_order(db: Session, *, order: Order) -> Order:
     db.commit()
     db.refresh(order)
     return order
+
+
+def process_pending_orders(db: Session) -> int:
+    statement = (
+        update(Order)
+        .where(Order.status == OrderStatus.PENDING)
+        .values(status=OrderStatus.PROCESSING, updated_at=func.now())
+    )
+    result = db.execute(statement)
+    db.commit()
+    return result.rowcount or 0
 
 
 def _get_active_products_by_id(db: Session, product_ids: set[int]) -> dict[int, Product]:

@@ -21,22 +21,22 @@ Use this backend for an e-commerce order processing API:
 - service-layer business rules
 - JWT authentication and password hashing
 - Alembic migrations
-- APScheduler background jobs
+- Celery Beat background jobs with Redis
 - pytest API and service tests
 
 ## Current State
 
-The project is still a scaffold.
+The project is still in progress.
 
-- Config, logging, database models, Alembic, SQLite setup, and auth are done.
-- `app/api/v1/auth.py` provides register, login, and current-user endpoints.
-- `tests/test_auth.py` covers the implemented auth endpoints with an isolated
-  SQLite test database.
+- Config, logging, database models, Alembic, SQLite setup, auth, product listing,
+  address CRUD, customer order flows, and Celery pending-order processing are done.
+- `app/core/celery_app.py` configures the Redis-backed Celery app and beat schedule.
+- `app/services/scheduler.py` exposes the Celery task wrapper.
+- `tests/test_scheduler.py` covers pending-order processing without requiring Redis.
 - `PRD.md` is the source of truth for the intended backend behavior.
 - `README.md` and `AI_USAGE.md` document setup, verification, and AI-assisted
   development notes.
-- Product, address, order, report, scheduler, and broader tests still need to
-  be added.
+- Admin reports and admin order status updates still need to be added.
 
 ## Build Verification
 
@@ -56,6 +56,13 @@ For local API smoke testing, run the app with:
 
 ```bash
 uvicorn app.main:app --reload
+```
+
+For local background processing, run Redis plus Celery worker and beat:
+
+```bash
+celery -A app.core.celery_app:celery_app worker --loglevel=info
+celery -A app.core.celery_app:celery_app beat --loglevel=info
 ```
 
 ## Critical Rules
@@ -96,6 +103,7 @@ app/
       orders.py
       reports.py
   core/
+    celery_app.py
     config.py
     security.py
     logging.py

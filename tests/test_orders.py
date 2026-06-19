@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.db.models.orders import Order, OrderStatus
 from app.db.models.products import Product
+from app.db.models.users import UserRole
 from app.services.products import seed_sample_products
+from app.services.users import get_user_by_email
 
 
 def _register_and_login(
@@ -73,6 +75,13 @@ def _create_order(
     )
     assert response.status_code == 201
     return response.json()
+
+
+def _promote_to_admin(db_session: Session, email: str) -> None:
+    user = get_user_by_email(db_session, email)
+    assert user is not None
+    user.role = UserRole.ADMIN
+    db_session.commit()
 
 
 def test_create_order_with_multiple_items_calculates_totals_and_snapshots(
@@ -288,6 +297,139 @@ def test_cancel_pending_order_and_reject_non_pending_cancel(
     assert cancel_response.json()["status"] == "CANCELLED"
     assert non_pending_response.status_code == 400
     assert non_pending_response.json()["detail"] == "Only pending orders can be cancelled"
+
+
+def test_admin_can_update_order_status_and_customer_cannot(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    product = seed_sample_products(db_session)[0]
+    customer_headers = _register_and_login(client, email="customer@example.com")
+    admin_headers = _register_and_login(client, email="admin@example.com")
+    _promote_to_admin(db_session, "admin@example.com")
+    address = _create_address(client, customer_headers)
+    order = _create_order(
+        client,
+        customer_headers,
+        address_id=address["id"],
+        product_id=product.id,
+    )
+
+    customer_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "SHIPPED"},
+        headers=customer_headers,
+    )
+    admin_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "SHIPPED"},
+        headers=admin_headers,
+    )
+
+    assert customer_response.status_code == 403
+    assert customer_response.json()["detail"] == "Admin access required"
+    assert admin_response.status_code == 200
+    assert admin_response.json()["status"] == "SHIPPED"
+
+
+def test_admin_status_update_rejects_cancelled_orders(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    product = seed_sample_products(db_session)[0]
+    customer_headers = _register_and_login(client, email="customer@example.com")
+    admin_headers = _register_and_login(client, email="admin@example.com")
+    _promote_to_admin(db_session, "admin@example.com")
+    address = _create_address(client, customer_headers)
+    order = _create_order(
+        client,
+        customer_headers,
+        address_id=address["id"],
+        product_id=product.id,
+    )
+    active_order = _create_order(
+        client,
+        customer_headers,
+        address_id=address["id"],
+        product_id=product.id,
+    )
+    cancel_response = client.post(
+        f"/api/v1/orders/{order['id']}/cancel",
+        headers=customer_headers,
+    )
+    assert cancel_response.status_code == 200
+
+    cancelled_order_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "DELIVERED"},
+        headers=admin_headers,
+    )
+    cancel_status_response = client.patch(
+        f"/api/v1/orders/{active_order['id']}/status",
+        json={"status": "CANCELLED"},
+        headers=admin_headers,
+    )
+    missing_order_response = client.patch(
+        "/api/v1/orders/999/status",
+        json={"status": "SHIPPED"},
+        headers=admin_headers,
+    )
+
+    assert cancelled_order_response.status_code == 400
+    assert cancelled_order_response.json()["detail"] == "Cancelled orders cannot be updated"
+    assert cancel_status_response.status_code == 400
+    assert (
+        cancel_status_response.json()["detail"]
+        == "Use the cancel endpoint to cancel pending orders"
+    )
+    assert missing_order_response.status_code == 404
+
+
+def test_admin_report_lists_all_orders_with_status_filter(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    products = seed_sample_products(db_session)
+    first_headers = _register_and_login(client, email="first@example.com")
+    second_headers = _register_and_login(client, email="second@example.com")
+    admin_headers = _register_and_login(client, email="admin@example.com")
+    _promote_to_admin(db_session, "admin@example.com")
+    first_address = _create_address(client, first_headers)
+    second_address = _create_address(client, second_headers)
+    pending_order = _create_order(
+        client,
+        first_headers,
+        address_id=first_address["id"],
+        product_id=products[0].id,
+    )
+    shipped_order = _create_order(
+        client,
+        second_headers,
+        address_id=second_address["id"],
+        product_id=products[1].id,
+    )
+    db_order = db_session.get(Order, shipped_order["id"])
+    assert db_order is not None
+    db_order.status = OrderStatus.SHIPPED
+    db_session.commit()
+
+    customer_response = client.get("/api/v1/reports/orders", headers=first_headers)
+    report_response = client.get("/api/v1/reports/orders", headers=admin_headers)
+    filtered_response = client.get(
+        "/api/v1/reports/orders?status=PENDING",
+        headers=admin_headers,
+    )
+
+    assert customer_response.status_code == 403
+    assert report_response.status_code == 200
+    assert {order["id"] for order in report_response.json()} == {
+        pending_order["id"],
+        shipped_order["id"],
+    }
+    assert filtered_response.status_code == 200
+    assert [order["id"] for order in filtered_response.json()] == [pending_order["id"]]
+    assert filtered_response.json()[0]["customer_email"] == "first@example.com"
+    assert filtered_response.json()[0]["item_count"] == 1
 
 
 def test_order_snapshots_do_not_change_after_address_or_product_updates(

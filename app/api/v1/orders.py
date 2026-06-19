@@ -1,19 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin_user
 from app.db.models.orders import Order, OrderStatus
 from app.db.models.users import User
 from app.db.session import get_db
-from app.schemas.orders import OrderCreate, OrderRead
+from app.schemas.orders import OrderCreate, OrderRead, OrderStatusUpdate
 from app.services.orders import (
     AddressNotFoundError,
     OrderCancellationError,
+    OrderStatusUpdateError,
     ProductNotFoundError,
     cancel_order,
     create_order,
+    get_order_by_id,
     get_user_order,
     list_user_orders,
+    update_order_status,
 )
 
 
@@ -63,6 +66,28 @@ def cancel_customer_order(
     try:
         return cancel_order(db, order=order)
     except OrderCancellationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.patch("/{order_id}/status", response_model=OrderRead)
+def update_customer_order_status(
+    order_id: int,
+    payload: OrderStatusUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin_user),
+) -> Order:
+    order = get_order_by_id(db, order_id=order_id)
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+    try:
+        return update_order_status(db, order=order, new_status=payload.status)
+    except OrderStatusUpdateError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),

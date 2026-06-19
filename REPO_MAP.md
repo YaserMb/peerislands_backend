@@ -54,6 +54,7 @@ backend/
         orders.py
         products.py
     core/
+      celery_app.py
       config.py
       logging.py
       security.py
@@ -76,6 +77,7 @@ backend/
       auth.py
       orders.py
       products.py
+      scheduler.py
       users.py
   test/
   tests/
@@ -84,6 +86,7 @@ backend/
     test_auth.py
     test_orders.py
     test_products.py
+    test_scheduler.py
   venv/
 ```
 
@@ -98,8 +101,8 @@ backend/
 | `AI_USAGE.md` | Summary of AI-assisted implementation work and verification performed. |
 | `AGENTS.md` | Instructions for AI coding agents working in this backend. |
 | `REPO_MAP.md` | This file; quick navigation guide. |
-| `requirements.txt` | Python dependencies for FastAPI, SQLAlchemy, Alembic, auth, scheduler, and tests. |
-| `.env.example` | Documented local environment variables; defaults to SQLite at `sqlite:///./app.db`. |
+| `requirements.txt` | Python dependencies for FastAPI, SQLAlchemy, Alembic, auth, Celery Redis scheduling, and tests. |
+| `.env.example` | Documented local environment variables for SQLite, JWT, CORS, and Celery Redis scheduling. |
 | `.gitignore` | Ignores `.env`, virtualenvs, Python build artifacts, and local SQLite database files. |
 | `alembic.ini` | Alembic configuration using `alembic/` as the migration script location. |
 | `alembic/env.py` | Alembic runtime setup that loads `DATABASE_URL` from application settings and uses `Base.metadata`. |
@@ -111,6 +114,7 @@ backend/
 | `app/api/v1/auth.py` | Register, login, and current-user endpoints under `/api/v1/auth`. |
 | `app/api/v1/orders.py` | Authenticated customer order create/list/detail/cancel endpoints under `/api/v1/orders`. |
 | `app/api/v1/products.py` | Public active product listing endpoint under `/api/v1/products`. |
+| `app/core/celery_app.py` | Celery app configuration, Redis broker/backend settings, and beat schedule. |
 | `app/core/config.py` | Pydantic settings loaded from `.env`, including SQLite-first database URL, log level, JWT settings, and CORS origins. |
 | `app/core/security.py` | Password hashing, JWT creation/validation, and current-user dependency. |
 | `app/core/logging.py` | Application logging setup for app, Uvicorn, access, and SQLAlchemy loggers. |
@@ -129,12 +133,14 @@ backend/
 | `app/services/auth.py` | Registration and login authentication helpers. |
 | `app/services/products.py` | Active product listing, active-product lookup, and sample product seed helper. |
 | `app/services/users.py` | User lookup and creation helpers. |
-| `app/services/orders.py` | Customer order creation, server-side totals, snapshots, listing, detail lookup, and pending cancellation rules. |
+| `app/services/orders.py` | Customer order creation, server-side totals, snapshots, listing, detail lookup, pending cancellation, and pending-to-processing batch logic. |
+| `app/services/scheduler.py` | Celery task wrapper that opens a DB session and runs pending-order processing. |
 | `tests/conftest.py` | Isolated SQLite database and FastAPI test client fixtures. |
 | `tests/test_addresses.py` | Address CRUD, authentication, ownership, and default-address coverage. |
 | `tests/test_auth.py` | Register, duplicate registration, login, bad login, and current-user auth coverage. |
 | `tests/test_orders.py` | Customer order creation, validation, ownership, listing, filtering, cancellation, and snapshot coverage. |
 | `tests/test_products.py` | Product listing and product service seed/active-lookup coverage. |
+| `tests/test_scheduler.py` | Celery Beat schedule, task wrapper, and pending-to-processing service coverage. |
 | `test/` | Legacy empty test directory; prefer `tests/` for new pytest files. |
 
 ## 4) Files To Add
@@ -146,18 +152,11 @@ backend/
 | `app/api/v1/reports.py` | Admin order report endpoint. |
 | `app/api/v1/orders.py` | Admin order status-update endpoint extension. |
 
-### Services
-
-| Path | Purpose |
-|------|---------|
-| `app/services/scheduler.py` | `process_pending_orders` job function. |
-
 ### Tests
 
 | Path | Purpose |
 |------|---------|
 | `tests/test_reports.py` | Admin-only all-orders report. |
-| `tests/test_scheduler.py` | Pending-to-processing background job logic. |
 
 ## 5) Task-To-File Index
 
@@ -171,7 +170,7 @@ backend/
 | Address CRUD | `app/services/addresses.py`, `app/api/v1/addresses.py`, `app/schemas/addresses.py` |
 | Product catalog | `app/services/products.py`, `app/api/v1/products.py`, `app/db/models/products.py` |
 | Admin reporting | `app/api/v1/reports.py`, `app/services/orders.py` |
-| Background processing | `app/services/scheduler.py`, app startup scheduler wiring |
+| Background processing | `app/core/celery_app.py`, `app/services/scheduler.py`, `app/services/orders.py` |
 | Tests | Matching file under `tests/` |
 
 ## 6) Implementation Order
@@ -183,8 +182,8 @@ backend/
 5. Add address CRUD. (done)
 6. Add customer order create/list/detail/cancel behavior. (done)
 7. Add admin order status/report behavior.
-8. Add APScheduler startup/shutdown wiring and testable job service.
-9. Add remaining pytest coverage for admin reports, status updates, and scheduler behavior.
+8. Add Celery Beat + Redis pending-order scheduler. (done)
+9. Add remaining pytest coverage for admin reports and status updates.
 10. Keep README and AI_USAGE updated as user-facing behavior expands.
 
 ## 7) Notes

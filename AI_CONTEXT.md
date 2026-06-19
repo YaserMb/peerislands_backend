@@ -10,8 +10,9 @@ Last synthesized: 2026-06-19
 | Product catalog behavior | §3 Product Catalog Flow |
 | Address management behavior | §4 Address Management Flow |
 | Customer order behavior | §5 Customer Order Flow |
-| Database and migrations | §6 Persistence |
-| Test expectations | §7 Verification |
+| Background processing | §6 Background Processing |
+| Database and migrations | §7 Persistence |
+| Test expectations | §8 Verification |
 
 ## §1 Purpose
 
@@ -40,7 +41,7 @@ Implemented endpoints:
 Pending endpoint groups:
 
 - Admin order status update flow.
-- Admin reports and scheduled pending-order processing.
+- Admin reports.
 
 ## §3 Product Catalog Flow
 
@@ -108,7 +109,28 @@ Rules:
 - Only `PENDING` orders can be cancelled.
 - Inactive products cannot be ordered.
 
-## §6 Persistence
+## §6 Background Processing
+
+Celery Beat schedules pending-order processing through Redis every 300 seconds.
+
+```text
+app/core/celery_app.py
+  -> broker/result backend from CELERY_BROKER_URL and CELERY_RESULT_BACKEND
+  -> beat task app.services.scheduler.process_pending_orders_task
+
+app/services/scheduler.py
+  -> opens SessionLocal
+  -> app/services/orders.py:process_pending_orders
+  -> closes the session
+```
+
+Rules:
+
+- The Celery task is only a DB-session wrapper.
+- The reusable service updates `PENDING` orders to `PROCESSING` and returns the processed count.
+- Tests call the service/task directly and do not require a running Redis server.
+
+## §7 Persistence
 
 Alembic migrations define the database shape and seed local orderable products.
 
@@ -123,7 +145,10 @@ The product seed data currently includes:
 - `PI-MOUSE-001`
 - `PI-HEADSET-001`
 
-## §7 Verification
+Only products are seeded. Users, saved addresses, and orders are created through
+the API during normal use or in tests.
+
+## §8 Verification
 
 Current pytest coverage includes:
 
@@ -139,6 +164,8 @@ Current pytest coverage includes:
 - Customer order creation with multiple items and server-side totals.
 - Order authentication, validation, ownership, listing, status filtering, cancellation,
   inactive-product rejection, and snapshot stability.
+- Celery Beat schedule configuration, task wrapper behavior, and pending-order
+  processing service behavior.
 
 Run verification from `backend/`:
 

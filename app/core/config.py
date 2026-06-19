@@ -13,6 +13,10 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./app.db"
 
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+    pending_order_processing_interval_seconds: int = Field(default=300, gt=0)
+
     secret_key: str = Field(default="change-me-in-local-env", min_length=16)
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
