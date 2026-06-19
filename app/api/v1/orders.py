@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user, require_admin_user
@@ -6,9 +6,11 @@ from app.db.models.orders import Order, OrderStatus
 from app.db.models.users import User
 from app.db.session import get_db
 from app.schemas.orders import OrderCreate, OrderRead, OrderStatusUpdate
+from app.schemas.pagination import PaginatedResponse
 from app.services.orders import (
     AddressNotFoundError,
     OrderCancellationError,
+    OrderIdempotencyConflictError,
     OrderStatusUpdateError,
     ProductNotFoundError,
     cancel_order,
@@ -26,25 +28,44 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 @router.post("", response_model=OrderRead, status_code=status.HTTP_201_CREATED)
 def create_customer_order(
     payload: OrderCreate,
+    idempotency_key: str | None = Header(default=None, min_length=1, max_length=255),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Order:
     try:
-        return create_order(db, user_id=current_user.id, payload=payload)
+        return create_order(
+            db,
+            user_id=current_user.id,
+            payload=payload,
+            idempotency_key=idempotency_key,
+        )
     except (AddressNotFoundError, ProductNotFoundError) as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+    except OrderIdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
 
-@router.get("", response_model=list[OrderRead])
+@router.get("", response_model=PaginatedResponse[OrderRead])
 def list_customer_orders(
     status_filter: OrderStatus | None = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[Order]:
-    return list_user_orders(db, user_id=current_user.id, status_filter=status_filter)
+) -> PaginatedResponse:
+    return list_user_orders(
+        db,
+        user_id=current_user.id,
+        page=page,
+        page_size=page_size,
+        status_filter=status_filter,
+    )
 
 
 @router.get("/{order_id}", response_model=OrderRead)

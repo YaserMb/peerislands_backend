@@ -29,7 +29,12 @@ def test_list_products_returns_seeded_active_products(
     response = client.get("/api/v1/products")
 
     assert response.status_code == 200
-    products = response.json()
+    product_page = response.json()
+    products = product_page["items"]
+    assert product_page["page"] == 1
+    assert product_page["page_size"] == 20
+    assert product_page["total"] == len(SAMPLE_PRODUCTS)
+    assert product_page["total_pages"] == 1
     assert len(products) == len(SAMPLE_PRODUCTS)
     assert [product["sku"] for product in products] == [
         product.sku for product in seeded_products
@@ -45,6 +50,15 @@ def test_list_products_returns_seeded_active_products(
         "created_at": seeded_products[0].created_at.isoformat(),
         "updated_at": seeded_products[0].updated_at.isoformat(),
     }
+
+    paginated_response = client.get("/api/v1/products?page=2&page_size=2")
+    assert paginated_response.status_code == 200
+    paginated_page = paginated_response.json()
+    assert paginated_page["total"] == len(SAMPLE_PRODUCTS)
+    assert paginated_page["total_pages"] == 2
+    assert [product["sku"] for product in paginated_page["items"]] == [
+        seeded_products[2].sku
+    ]
 
 
 def test_seed_sample_products_is_idempotent(db_session: Session) -> None:

@@ -27,21 +27,30 @@ Implemented endpoints:
 - `POST /api/v1/auth/register` creates a customer account.
 - `POST /api/v1/auth/login` returns a bearer token using OAuth2 password form data.
 - `GET /api/v1/auth/me` returns the authenticated user.
-- `GET /api/v1/products` returns active products that can be ordered.
+- `GET /api/v1/products` returns paginated active products that can be ordered.
 - `POST /api/v1/addresses` creates a saved address for the authenticated user.
-- `GET /api/v1/addresses` lists the authenticated user's saved addresses.
+- `GET /api/v1/addresses` lists the authenticated user's saved addresses with pagination.
 - `GET /api/v1/addresses/{address_id}` returns one owned address.
 - `PATCH /api/v1/addresses/{address_id}` updates one owned address.
 - `DELETE /api/v1/addresses/{address_id}` deletes one owned address.
-- `POST /api/v1/orders` creates a pending multi-item order for the authenticated user.
-- `GET /api/v1/orders` lists the authenticated user's orders, optionally filtered by `status`.
+- `POST /api/v1/orders` creates a pending multi-item order for the authenticated user and supports the `Idempotency-Key` header.
+- `GET /api/v1/orders` lists the authenticated user's orders with pagination, optionally filtered by `status`.
 - `GET /api/v1/orders/{order_id}` returns one owned order with items.
 - `POST /api/v1/orders/{order_id}/cancel` cancels one owned pending order.
+- `PATCH /api/v1/orders/{order_id}/status` lets admins advance orders through the status state machine.
+- `GET /api/v1/reports/orders` lets admins list paginated order reports, optionally filtered by `status`.
 
-Pending endpoint groups:
+List and report endpoints return a common pagination envelope:
 
-- Admin order status update flow.
-- Admin reports.
+```json
+{
+  "items": [],
+  "page": 1,
+  "page_size": 20,
+  "total": 0,
+  "total_pages": 0
+}
+```
 
 ## §3 Product Catalog Flow
 
@@ -59,6 +68,7 @@ GET /api/v1/products
 Rules:
 
 - Only active products are returned from the catalog.
+- Product listing uses `page` and `page_size` query parameters.
 - Product prices are represented as `Decimal`/`Numeric(12, 2)`.
 - Product creation and update APIs are intentionally not implemented yet.
 - `get_active_product_by_id` is available for order creation so inactive
@@ -81,6 +91,7 @@ Authorization: Bearer <token>
 Rules:
 
 - Users can create, list, retrieve, update, and delete only their own addresses.
+- Address listing uses `page` and `page_size` query parameters.
 - Accessing another user's address returns `404 Address not found`.
 - The first saved address becomes default even when `is_default` is omitted or false.
 - Setting an address as default clears the user's other default addresses.
@@ -105,9 +116,23 @@ Rules:
 - Clients submit only `shipping_address_id`, `product_id`, and `quantity`.
 - New orders start in `PENDING`.
 - Users can list, filter, retrieve, and cancel only their own orders.
+- Order listing uses `page`, `page_size`, and optional `status` query parameters.
 - Accessing another user's order returns `404 Order not found`.
 - Only `PENDING` orders can be cancelled.
 - Inactive products cannot be ordered.
+- When `Idempotency-Key` is provided on order creation, replaying the same key
+  and payload returns the original order. Reusing the key with a different
+  payload returns `409 Conflict`.
+- Admin status updates follow this state machine:
+
+```text
+PENDING -> PROCESSING -> SHIPPED -> DELIVERED
+PENDING -> CANCELLED
+DELIVERED and CANCELLED are terminal
+```
+
+- The admin status endpoint cannot set `CANCELLED`; clients must use the cancel
+  endpoint so cancellation remains limited to pending orders.
 
 ## §6 Background Processing
 
@@ -120,13 +145,17 @@ app/core/celery_app.py
 
 app/services/scheduler.py
   -> opens SessionLocal
+  -> takes Redis lock locks:pending-order-processing
   -> app/services/orders.py:process_pending_orders
   -> closes the session
 ```
 
 Rules:
 
-- The Celery task is only a DB-session wrapper.
+- The Celery task is a DB-session wrapper plus a Redis distributed lock.
+- If another worker already holds the lock, the task returns `0` without
+  processing orders.
+- The lock TTL is controlled by `PENDING_ORDER_PROCESSING_LOCK_TTL_SECONDS`.
 - The reusable service updates `PENDING` orders to `PROCESSING` and returns the processed count.
 - Tests call the service/task directly and do not require a running Redis server.
 
@@ -138,6 +167,8 @@ Alembic migrations define the database shape and seed local orderable products.
   orders, and order items.
 - `20260618_0002_seed_sample_products.py` inserts active sample products so
   orders can be created against a fresh local database.
+- `20260619_0003_add_order_idempotency.py` adds per-user order idempotency keys
+  and payload hashes.
 
 The product seed data currently includes:
 
@@ -154,6 +185,7 @@ Current pytest coverage includes:
 
 - Auth registration, duplicate email handling, login, bad login, and current user.
 - Product listing returns active seeded products.
+- Product, address, order, and report list endpoints return paginated envelopes.
 - Inactive products are excluded from the catalog.
 - Product seed helper is idempotent.
 - Active-product lookup ignores inactive products.
@@ -162,10 +194,11 @@ Current pytest coverage includes:
 - Address ownership enforcement across retrieve/update/delete.
 - Default-address behavior when creating and updating saved addresses.
 - Customer order creation with multiple items and server-side totals.
-- Order authentication, validation, ownership, listing, status filtering, cancellation,
-  inactive-product rejection, and snapshot stability.
+- Order authentication, validation, ownership, listing, pagination, status
+  filtering, idempotency, strict status transitions, cancellation, inactive-product
+  rejection, and snapshot stability.
 - Celery Beat schedule configuration, task wrapper behavior, and pending-order
-  processing service behavior.
+  processing service behavior, including lock contention.
 
 Run verification from `backend/`:
 

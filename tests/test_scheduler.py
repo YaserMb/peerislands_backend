@@ -1,3 +1,6 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -7,6 +10,11 @@ from app.db.models.orders import Order, OrderStatus
 from app.services.orders import process_pending_orders
 from app.services.products import seed_sample_products
 from app.services.scheduler import process_pending_orders_task
+
+
+@contextmanager
+def _fake_lock(acquired: bool = True) -> Iterator[bool]:
+    yield acquired
 
 
 def _register_and_login(
@@ -117,12 +125,43 @@ def test_process_pending_orders_task_uses_session_factory(
         product_id=product.id,
     )
     monkeypatch.setattr("app.services.scheduler.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        "app.services.scheduler.redis_distributed_lock",
+        lambda **_: _fake_lock(),
+    )
 
     processed_count = process_pending_orders_task.run()
 
     db_session.expire_all()
     assert processed_count == 1
     assert db_session.get(Order, order["id"]).status == OrderStatus.PROCESSING
+
+
+def test_process_pending_orders_task_skips_work_when_lock_is_held(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    product = seed_sample_products(db_session)[0]
+    headers = _register_and_login(client)
+    address = _create_address(client, headers)
+    order = _create_order(
+        client,
+        headers,
+        address_id=address["id"],
+        product_id=product.id,
+    )
+    monkeypatch.setattr("app.services.scheduler.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        "app.services.scheduler.redis_distributed_lock",
+        lambda **_: _fake_lock(acquired=False),
+    )
+
+    processed_count = process_pending_orders_task.run()
+
+    db_session.expire_all()
+    assert processed_count == 0
+    assert db_session.get(Order, order["id"]).status == OrderStatus.PENDING
 
 
 def test_celery_beat_schedules_pending_order_processing() -> None:

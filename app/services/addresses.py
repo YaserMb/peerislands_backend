@@ -2,15 +2,23 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.models.addresses import Address
+from app.schemas.pagination import PaginatedResponse
 from app.schemas.addresses import AddressCreate, AddressUpdate
+from app.services.pagination import paginate_scalars
 
 
-def list_user_addresses(db: Session, user_id: int) -> list[Address]:
+def list_user_addresses(
+    db: Session,
+    user_id: int,
+    *,
+    page: int,
+    page_size: int,
+) -> PaginatedResponse:
     statement = select(Address).where(Address.user_id == user_id).order_by(
         Address.is_default.desc(),
         Address.id,
     )
-    return list(db.scalars(statement))
+    return paginate_scalars(db, statement, page=page, page_size=page_size)
 
 
 def get_user_address(db: Session, *, user_id: int, address_id: int) -> Address | None:

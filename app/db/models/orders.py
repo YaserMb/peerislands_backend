@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, UniqueConstraint, func
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,6 +29,7 @@ class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         CheckConstraint("total_amount >= 0", name="ck_orders_total_amount_non_negative"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_orders_user_id_idempotency_key"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -45,6 +46,8 @@ class Order(Base):
         nullable=False,
     )
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    idempotency_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     shipping_full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     shipping_phone: Mapped[str] = mapped_column(String(32), nullable=False)
     shipping_address_line1: Mapped[str] = mapped_column(String(255), nullable=False)

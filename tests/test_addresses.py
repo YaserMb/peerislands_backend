@@ -55,7 +55,9 @@ def test_create_list_retrieve_update_and_delete_address(client: TestClient) -> N
 
     list_response = client.get("/api/v1/addresses", headers=headers)
     assert list_response.status_code == 200
-    assert [address["id"] for address in list_response.json()] == [created_address["id"]]
+    address_page = list_response.json()
+    assert address_page["total"] == 1
+    assert [address["id"] for address in address_page["items"]] == [created_address["id"]]
 
     retrieve_response = client.get(
         f"/api/v1/addresses/{created_address['id']}",
@@ -81,7 +83,7 @@ def test_create_list_retrieve_update_and_delete_address(client: TestClient) -> N
 
     list_after_delete_response = client.get("/api/v1/addresses", headers=headers)
     assert list_after_delete_response.status_code == 200
-    assert list_after_delete_response.json() == []
+    assert list_after_delete_response.json()["items"] == []
 
 
 def test_setting_default_address_clears_previous_default(client: TestClient) -> None:
@@ -106,7 +108,7 @@ def test_setting_default_address_clears_previous_default(client: TestClient) -> 
     list_response = client.get("/api/v1/addresses", headers=headers)
     addresses_by_id = {
         address["id"]: address
-        for address in list_response.json()
+        for address in list_response.json()["items"]
     }
 
     assert addresses_by_id[first_id]["is_default"] is False
@@ -123,7 +125,7 @@ def test_setting_default_address_clears_previous_default(client: TestClient) -> 
     list_response = client.get("/api/v1/addresses", headers=headers)
     addresses_by_id = {
         address["id"]: address
-        for address in list_response.json()
+        for address in list_response.json()["items"]
     }
     assert addresses_by_id[first_id]["is_default"] is True
     assert addresses_by_id[second_id]["is_default"] is False
@@ -166,5 +168,30 @@ def test_address_ownership_is_enforced(client: TestClient) -> None:
     owner_list_response = client.get("/api/v1/addresses", headers=owner_headers)
     other_list_response = client.get("/api/v1/addresses", headers=other_headers)
 
-    assert [address["id"] for address in owner_list_response.json()] == [address_id]
-    assert other_list_response.json() == []
+    assert [address["id"] for address in owner_list_response.json()["items"]] == [address_id]
+    assert other_list_response.json()["items"] == []
+
+
+def test_list_addresses_supports_pagination(client: TestClient) -> None:
+    headers = _register_and_login(client)
+    first_response = client.post(
+        "/api/v1/addresses",
+        json=_address_payload(address_line1="First address"),
+        headers=headers,
+    )
+    second_response = client.post(
+        "/api/v1/addresses",
+        json=_address_payload(address_line1="Second address"),
+        headers=headers,
+    )
+
+    response = client.get("/api/v1/addresses?page=2&page_size=1", headers=headers)
+
+    assert response.status_code == 200
+    page = response.json()
+    assert page["page"] == 2
+    assert page["page_size"] == 1
+    assert page["total"] == 2
+    assert page["total_pages"] == 2
+    assert [address["id"] for address in page["items"]] == [second_response.json()["id"]]
+    assert first_response.status_code == 201

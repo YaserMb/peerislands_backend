@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
@@ -6,6 +6,7 @@ from app.db.models.addresses import Address
 from app.db.models.users import User
 from app.db.session import get_db
 from app.schemas.addresses import AddressCreate, AddressRead, AddressUpdate
+from app.schemas.pagination import PaginatedResponse
 from app.services.addresses import (
     create_address,
     delete_address,
@@ -27,12 +28,19 @@ def create_saved_address(
     return create_address(db, user_id=current_user.id, payload=payload)
 
 
-@router.get("", response_model=list[AddressRead])
+@router.get("", response_model=PaginatedResponse[AddressRead])
 def list_saved_addresses(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[Address]:
-    return list_user_addresses(db, current_user.id)
+) -> PaginatedResponse:
+    return list_user_addresses(
+        db,
+        current_user.id,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/{address_id}", response_model=AddressRead)

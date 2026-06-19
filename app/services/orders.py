@@ -1,17 +1,29 @@
+import hashlib
+import json
 from decimal import Decimal
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models.addresses import Address
 from app.db.models.orders import Order, OrderItem, OrderStatus
 from app.db.models.products import Product
 from app.db.models.users import User
+from app.schemas.pagination import PaginatedResponse
 from app.schemas.orders import OrderCreate
 from app.services.addresses import get_user_address
+from app.services.pagination import paginate_mappings, paginate_scalars
 
 
 MONEY_QUANTUM = Decimal("0.01")
+VALID_ORDER_STATUS_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
+    OrderStatus.PENDING: {OrderStatus.PROCESSING, OrderStatus.CANCELLED},
+    OrderStatus.PROCESSING: {OrderStatus.SHIPPED},
+    OrderStatus.SHIPPED: {OrderStatus.DELIVERED},
+    OrderStatus.DELIVERED: set(),
+    OrderStatus.CANCELLED: set(),
+}
 
 
 class AddressNotFoundError(ValueError):
@@ -30,7 +42,28 @@ class OrderStatusUpdateError(ValueError):
     pass
 
 
-def create_order(db: Session, *, user_id: int, payload: OrderCreate) -> Order:
+class OrderIdempotencyConflictError(ValueError):
+    pass
+
+
+def create_order(
+    db: Session,
+    *,
+    user_id: int,
+    payload: OrderCreate,
+    idempotency_key: str | None = None,
+) -> Order:
+    payload_hash = _idempotency_payload_hash(payload) if idempotency_key else None
+    if idempotency_key is not None:
+        existing_order = get_order_by_idempotency_key(
+            db,
+            user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing_order is not None:
+            _validate_idempotency_payload(existing_order, payload_hash)
+            return existing_order
+
     address = get_user_address(
         db,
         user_id=user_id,
@@ -67,11 +100,27 @@ def create_order(db: Session, *, user_id: int, payload: OrderCreate) -> Order:
         shipping_address_id=address.id,
         status=OrderStatus.PENDING,
         total_amount=_money(total_amount),
+        idempotency_key=idempotency_key,
+        idempotency_payload_hash=payload_hash,
         **_shipping_snapshot(address),
         items=order_items,
     )
     db.add(order)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if idempotency_key is not None:
+            existing_order = get_order_by_idempotency_key(
+                db,
+                user_id=user_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing_order is not None:
+                _validate_idempotency_payload(existing_order, payload_hash)
+                return existing_order
+        raise
+
     db.refresh(order)
     return order
 
@@ -80,8 +129,10 @@ def list_user_orders(
     db: Session,
     *,
     user_id: int,
+    page: int,
+    page_size: int,
     status_filter: OrderStatus | None = None,
-) -> list[Order]:
+) -> PaginatedResponse:
     statement = (
         select(Order)
         .options(selectinload(Order.items))
@@ -90,7 +141,7 @@ def list_user_orders(
     )
     if status_filter is not None:
         statement = statement.where(Order.status == status_filter)
-    return list(db.scalars(statement))
+    return paginate_scalars(db, statement, page=page, page_size=page_size)
 
 
 def get_user_order(db: Session, *, user_id: int, order_id: int) -> Order | None:
@@ -111,11 +162,27 @@ def get_order_by_id(db: Session, *, order_id: int) -> Order | None:
     return db.scalar(statement)
 
 
+def get_order_by_idempotency_key(
+    db: Session,
+    *,
+    user_id: int,
+    idempotency_key: str,
+) -> Order | None:
+    statement = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.user_id == user_id, Order.idempotency_key == idempotency_key)
+    )
+    return db.scalar(statement)
+
+
 def list_all_orders_report(
     db: Session,
     *,
+    page: int,
+    page_size: int,
     status_filter: OrderStatus | None = None,
-) -> list[dict]:
+) -> PaginatedResponse:
     statement = (
         select(
             Order.id,
@@ -141,14 +208,18 @@ def list_all_orders_report(
     if status_filter is not None:
         statement = statement.where(Order.status == status_filter)
 
-    return [dict(row._mapping) for row in db.execute(statement)]
+    return paginate_mappings(db, statement, page=page, page_size=page_size)
 
 
 def update_order_status(db: Session, *, order: Order, new_status: OrderStatus) -> Order:
-    if order.status == OrderStatus.CANCELLED:
-        raise OrderStatusUpdateError("Cancelled orders cannot be updated")
+    if order.status == new_status:
+        return order
     if new_status == OrderStatus.CANCELLED:
         raise OrderStatusUpdateError("Use the cancel endpoint to cancel pending orders")
+    if new_status not in VALID_ORDER_STATUS_TRANSITIONS[order.status]:
+        raise OrderStatusUpdateError(
+            f"Invalid order status transition from {order.status.value} to {new_status.value}"
+        )
 
     order.status = new_status
     db.commit()
@@ -157,7 +228,7 @@ def update_order_status(db: Session, *, order: Order, new_status: OrderStatus) -
 
 
 def cancel_order(db: Session, *, order: Order) -> Order:
-    if order.status != OrderStatus.PENDING:
+    if OrderStatus.CANCELLED not in VALID_ORDER_STATUS_TRANSITIONS[order.status]:
         raise OrderCancellationError("Only pending orders can be cancelled")
 
     order.status = OrderStatus.CANCELLED
@@ -200,3 +271,19 @@ def _shipping_snapshot(address: Address) -> dict[str, str | None]:
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(MONEY_QUANTUM)
+
+
+def _idempotency_payload_hash(payload: OrderCreate) -> str:
+    serialized_payload = json.dumps(
+        payload.model_dump(mode="json"),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest()
+
+
+def _validate_idempotency_payload(order: Order, payload_hash: str | None) -> None:
+    if order.idempotency_payload_hash != payload_hash:
+        raise OrderIdempotencyConflictError(
+            "Idempotency key was already used with a different order payload"
+        )

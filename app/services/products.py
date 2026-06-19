@@ -5,6 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.products import Product
+from app.schemas.pagination import PaginatedResponse
+from app.services.pagination import paginate_scalars
 
 
 class SampleProduct(TypedDict):
@@ -40,9 +42,9 @@ SAMPLE_PRODUCTS: tuple[SampleProduct, ...] = (
 )
 
 
-def list_active_products(db: Session) -> list[Product]:
+def list_active_products(db: Session, *, page: int, page_size: int) -> PaginatedResponse:
     statement = select(Product).where(Product.is_active.is_(True)).order_by(Product.id)
-    return list(db.scalars(statement))
+    return paginate_scalars(db, statement, page=page, page_size=page_size)
 
 
 def get_active_product_by_id(db: Session, product_id: int) -> Product | None:

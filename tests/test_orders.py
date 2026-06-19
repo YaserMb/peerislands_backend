@@ -130,6 +130,49 @@ def test_create_order_with_multiple_items_calculates_totals_and_snapshots(
     ]
 
 
+def test_order_creation_idempotency_key_replays_and_rejects_conflicts(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    product = seed_sample_products(db_session)[0]
+    headers = _register_and_login(client)
+    address = _create_address(client, headers)
+    idempotent_headers = {**headers, "Idempotency-Key": "create-order-123"}
+    payload = {
+        "shipping_address_id": address["id"],
+        "items": [{"product_id": product.id, "quantity": 1}],
+    }
+
+    first_response = client.post(
+        "/api/v1/orders",
+        json=payload,
+        headers=idempotent_headers,
+    )
+    replay_response = client.post(
+        "/api/v1/orders",
+        json=payload,
+        headers=idempotent_headers,
+    )
+    conflict_response = client.post(
+        "/api/v1/orders",
+        json={
+            "shipping_address_id": address["id"],
+            "items": [{"product_id": product.id, "quantity": 2}],
+        },
+        headers=idempotent_headers,
+    )
+
+    assert first_response.status_code == 201
+    assert replay_response.status_code == 201
+    assert replay_response.json()["id"] == first_response.json()["id"]
+    assert db_session.query(Order).count() == 1
+    assert conflict_response.status_code == 409
+    assert (
+        conflict_response.json()["detail"]
+        == "Idempotency key was already used with a different order payload"
+    )
+
+
 def test_order_creation_rejects_missing_auth_empty_items_and_invalid_ownership(
     client: TestClient,
     db_session: Session,
@@ -227,12 +270,53 @@ def test_retrieve_list_and_filter_user_orders(
     assert detail_response.status_code == 200
     assert detail_response.json()["id"] == pending_order["id"]
     assert list_response.status_code == 200
-    assert {order["id"] for order in list_response.json()} == {
+    list_page = list_response.json()
+    assert list_page["total"] == 2
+    assert list_page["total_pages"] == 1
+    assert {order["id"] for order in list_page["items"]} == {
         pending_order["id"],
         processing_order["id"],
     }
     assert filtered_response.status_code == 200
-    assert [order["id"] for order in filtered_response.json()] == [pending_order["id"]]
+    assert [order["id"] for order in filtered_response.json()["items"]] == [pending_order["id"]]
+
+
+def test_list_orders_supports_pagination(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    products = seed_sample_products(db_session)
+    headers = _register_and_login(client)
+    address = _create_address(client, headers)
+    first_order = _create_order(
+        client,
+        headers,
+        address_id=address["id"],
+        product_id=products[0].id,
+    )
+    second_order = _create_order(
+        client,
+        headers,
+        address_id=address["id"],
+        product_id=products[1].id,
+    )
+    third_order = _create_order(
+        client,
+        headers,
+        address_id=address["id"],
+        product_id=products[2].id,
+    )
+
+    response = client.get("/api/v1/orders?page=2&page_size=1", headers=headers)
+
+    assert response.status_code == 200
+    page = response.json()
+    assert page["page"] == 2
+    assert page["page_size"] == 1
+    assert page["total"] == 3
+    assert page["total_pages"] == 3
+    assert [order["id"] for order in page["items"]] == [second_order["id"]]
+    assert first_order["id"] < second_order["id"] < third_order["id"]
 
 
 def test_order_ownership_is_enforced(client: TestClient, db_session: Session) -> None:
@@ -257,7 +341,7 @@ def test_order_ownership_is_enforced(client: TestClient, db_session: Session) ->
     assert detail_response.status_code == 404
     assert cancel_response.status_code == 404
     assert other_list_response.status_code == 200
-    assert other_list_response.json() == []
+    assert other_list_response.json()["items"] == []
 
 
 def test_cancel_pending_order_and_reject_non_pending_cancel(
@@ -317,19 +401,86 @@ def test_admin_can_update_order_status_and_customer_cannot(
 
     customer_response = client.patch(
         f"/api/v1/orders/{order['id']}/status",
-        json={"status": "SHIPPED"},
+        json={"status": "PROCESSING"},
         headers=customer_headers,
     )
     admin_response = client.patch(
         f"/api/v1/orders/{order['id']}/status",
-        json={"status": "SHIPPED"},
+        json={"status": "PROCESSING"},
         headers=admin_headers,
     )
 
     assert customer_response.status_code == 403
     assert customer_response.json()["detail"] == "Admin access required"
     assert admin_response.status_code == 200
-    assert admin_response.json()["status"] == "SHIPPED"
+    assert admin_response.json()["status"] == "PROCESSING"
+
+
+def test_order_status_updates_follow_strict_state_machine(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    product = seed_sample_products(db_session)[0]
+    customer_headers = _register_and_login(client, email="customer@example.com")
+    admin_headers = _register_and_login(client, email="admin@example.com")
+    _promote_to_admin(db_session, "admin@example.com")
+    address = _create_address(client, customer_headers)
+    order = _create_order(
+        client,
+        customer_headers,
+        address_id=address["id"],
+        product_id=product.id,
+    )
+
+    direct_ship_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "SHIPPED"},
+        headers=admin_headers,
+    )
+    processing_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "PROCESSING"},
+        headers=admin_headers,
+    )
+    direct_delivered_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "DELIVERED"},
+        headers=admin_headers,
+    )
+    shipped_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "SHIPPED"},
+        headers=admin_headers,
+    )
+    delivered_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "DELIVERED"},
+        headers=admin_headers,
+    )
+    reopen_response = client.patch(
+        f"/api/v1/orders/{order['id']}/status",
+        json={"status": "PROCESSING"},
+        headers=admin_headers,
+    )
+
+    assert direct_ship_response.status_code == 400
+    assert (
+        direct_ship_response.json()["detail"]
+        == "Invalid order status transition from PENDING to SHIPPED"
+    )
+    assert processing_response.status_code == 200
+    assert direct_delivered_response.status_code == 400
+    assert (
+        direct_delivered_response.json()["detail"]
+        == "Invalid order status transition from PROCESSING to DELIVERED"
+    )
+    assert shipped_response.status_code == 200
+    assert delivered_response.status_code == 200
+    assert reopen_response.status_code == 400
+    assert (
+        reopen_response.json()["detail"]
+        == "Invalid order status transition from DELIVERED to PROCESSING"
+    )
 
 
 def test_admin_status_update_rejects_cancelled_orders(
@@ -376,7 +527,10 @@ def test_admin_status_update_rejects_cancelled_orders(
     )
 
     assert cancelled_order_response.status_code == 400
-    assert cancelled_order_response.json()["detail"] == "Cancelled orders cannot be updated"
+    assert (
+        cancelled_order_response.json()["detail"]
+        == "Invalid order status transition from CANCELLED to DELIVERED"
+    )
     assert cancel_status_response.status_code == 400
     assert (
         cancel_status_response.json()["detail"]
@@ -422,14 +576,28 @@ def test_admin_report_lists_all_orders_with_status_filter(
 
     assert customer_response.status_code == 403
     assert report_response.status_code == 200
-    assert {order["id"] for order in report_response.json()} == {
+    report_page = report_response.json()
+    assert report_page["total"] == 2
+    assert {order["id"] for order in report_page["items"]} == {
         pending_order["id"],
         shipped_order["id"],
     }
     assert filtered_response.status_code == 200
-    assert [order["id"] for order in filtered_response.json()] == [pending_order["id"]]
-    assert filtered_response.json()[0]["customer_email"] == "first@example.com"
-    assert filtered_response.json()[0]["item_count"] == 1
+    filtered_items = filtered_response.json()["items"]
+    assert [order["id"] for order in filtered_items] == [pending_order["id"]]
+    assert filtered_items[0]["customer_email"] == "first@example.com"
+    assert filtered_items[0]["item_count"] == 1
+
+    paginated_response = client.get(
+        "/api/v1/reports/orders?page=2&page_size=1",
+        headers=admin_headers,
+    )
+    assert paginated_response.status_code == 200
+    paginated_page = paginated_response.json()
+    assert paginated_page["page"] == 2
+    assert paginated_page["total"] == 2
+    assert paginated_page["total_pages"] == 2
+    assert len(paginated_page["items"]) == 1
 
 
 def test_order_snapshots_do_not_change_after_address_or_product_updates(

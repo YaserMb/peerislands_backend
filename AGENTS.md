@@ -28,15 +28,15 @@ Use this backend for an e-commerce order processing API:
 
 The project is still in progress.
 
-- Config, logging, database models, Alembic, SQLite setup, auth, product listing,
-  address CRUD, customer order flows, and Celery pending-order processing are done.
+- Config, logging, database models, Alembic, SQLite setup, auth, paginated
+  product/address/order/report listing, customer order flows, admin status/report
+  flows, order idempotency, and Celery pending-order processing are done.
 - `app/core/celery_app.py` configures the Redis-backed Celery app and beat schedule.
-- `app/services/scheduler.py` exposes the Celery task wrapper.
+- `app/services/scheduler.py` exposes the Celery task wrapper with a Redis lock.
 - `tests/test_scheduler.py` covers pending-order processing without requiring Redis.
 - `PRD.md` is the source of truth for the intended backend behavior.
 - `README.md` and `AI_USAGE.md` document setup, verification, and AI-assisted
   development notes.
-- Admin reports and admin order status updates still need to be added.
 
 ## Build Verification
 
@@ -74,6 +74,12 @@ celery -A app.core.celery_app:celery_app beat --loglevel=info
 - Never trust client-submitted prices or totals.
 - Enforce ownership for addresses and orders.
 - Restrict admin report and order-status updates to admin users.
+- Keep order status updates on the strict state machine:
+  `PENDING -> PROCESSING -> SHIPPED -> DELIVERED`, with `PENDING -> CANCELLED`
+  only through the cancel endpoint.
+- Use the shared pagination envelope for list and report endpoints.
+- Preserve `Idempotency-Key` duplicate protection for order creation.
+- Keep scheduled pending-order processing behind a distributed lock.
 - Hash passwords before storage.
 - Add pytest coverage for every new or modified endpoint.
 - Mock external services if any are introduced.
