@@ -28,7 +28,7 @@ Use this backend for an e-commerce order processing API:
 
 The project is still a scaffold.
 
-- Config, logging, database models, Alembic, and auth are implemented.
+- Config, logging, database models, Alembic, SQLite setup, and auth are done.
 - `app/api/v1/auth.py` provides register, login, and current-user endpoints.
 - `tests/test_auth.py` covers the implemented auth endpoints with an isolated
   SQLite test database.

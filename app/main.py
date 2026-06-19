@@ -24,8 +24,3 @@ async def log_unhandled_errors(request: Request, call_next):
             request.url.path,
         )
         raise
-
-
-@app.get('/test')
-def main():
-    return 'yaser'
