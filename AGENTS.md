@@ -95,40 +95,8 @@ Check for a matching project-local skill before making broad workflow changes.
 
 ## Expected Architecture
 
-Prefer this shape as implementation grows:
-
-```text
-app/
-  main.py
-  api/
-    v1/
-      api.py
-      auth.py
-      products.py
-      addresses.py
-      orders.py
-      reports.py
-  core/
-    celery_app.py
-    config.py
-    security.py
-    logging.py
-  db/
-    base.py
-    session.py
-    models/
-  schemas/
-    users.py
-    auth.py
-    orders.py
-  services/
-    users.py
-    auth.py
-    orders.py
-    scheduler.py
-tests/
-alembic/
-```
-
-Register new route modules through `app/api/v1/api.py`, then mount that router
-from `app/main.py`.
+- Route modules live in `app/api/v1/` and are registered through `app/api/v1/api.py`.
+- Business rules live in `app/services/`; shared helpers such as pagination and
+  locks stay there too.
+- Request/response contracts live in `app/schemas/`.
+- Model changes require matching Alembic migrations and pytest coverage.
